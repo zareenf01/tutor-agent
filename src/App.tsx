@@ -12,7 +12,9 @@ import {
   X,
   Paperclip,
   AlertCircle,
-  Square
+  Square,
+  Mic,
+  MicOff
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -48,6 +50,8 @@ export default function App() {
   const [showUploadModal, setShowUploadModal] = useState(!sessionId);
   const [error, setError] = useState<string | null>(null);
   const [isQuizActive, setIsQuizActive] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const recognitionRef = useRef<any>(null);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -124,11 +128,69 @@ export default function App() {
     }
   };
 
+  const committedTextRef = useRef<string>("");
+
+  const toggleVoiceInput = () => {
+    const SpeechRecognitionAPI: any =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognitionAPI) {
+      setError("Voice input is not supported in your browser. Try Chrome.");
+      return;
+    }
+
+    if (isListening) {
+      recognitionRef.current?.stop();
+      setIsListening(false);
+      return;
+    }
+
+    committedTextRef.current = inputText;
+
+    const recognition: any = new SpeechRecognitionAPI();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = "en-US";
+
+    recognition.onstart = () => setIsListening(true);
+
+    recognition.onresult = (event: any) => {
+      let interim = "";
+      let final = "";
+
+      for (let i = 0; i < event.results.length; i++) {
+        const t = event.results[i][0].transcript;
+        if (event.results[i].isFinal) {
+          final += t;
+        } else {
+          interim += t;
+        }
+      }
+
+      if (final) {
+        committedTextRef.current = (committedTextRef.current + " " + final).trim();
+        setInputText(committedTextRef.current);
+      } else {
+        // Show interim as preview on top of committed
+        setInputText((committedTextRef.current + " " + interim).trim());
+      }
+    };
+
+    recognition.onerror = (event: any) => {
+      console.error("Speech recognition error:", event.error);
+      setIsListening(false);
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+    };
+
+    recognitionRef.current = recognition;
+    recognition.start();
+  };
+
   const isQuizRequest = (text: string) => {
     const lowerText = text.toLowerCase();
-    // Match anything containing the word "quiz"
     if (lowerText.includes("quiz")) return true;
-    // Also catch related phrases
     const keywords = ["test me", "test my knowledge", "practice questions", "practice test", "trivia"];
     return keywords.some(keyword => lowerText.includes(keyword));
   };
@@ -161,12 +223,10 @@ export default function App() {
         }, { signal: controller.signal });
         setIsQuizActive(true);
       } else if (isQuizActive) {
-        // Submit answer to ongoing quiz
         response = await axios.post(`${API_BASE_URL}/quiz/answer`, {
           sessionId,
           answer: currentInput,
         }, { signal: controller.signal });
-        // If the response signals quiz is done, deactivate quiz mode
         const answerReply: string = response.data?.tutorMessage || response.data?.tutorReply || "";
         if (
           answerReply.toLowerCase().includes("quiz complete") ||
@@ -179,7 +239,6 @@ export default function App() {
           setIsQuizActive(false);
         }
       } else {
-        // Regular chat
         response = await axios.post(`${API_BASE_URL}/chat`, {
           sessionId,
           message: currentInput,
@@ -358,19 +417,17 @@ export default function App() {
                   </motion.div>
                 )}
               </div>
-              {/* Spacer to prevent overlap with fixed input area */}
               <div className="h-12" />
               <div ref={messagesEndRef} />
             </main>
 
-            {/* Input Area */}
             <div className="fixed bottom-0 left-0 right-0 bg-gradient-to-t from-white via-white to-transparent pt-10 pb-8 px-6 z-30">
               <div className="max-w-3xl mx-auto relative">
                 <form 
                   onSubmit={handleSendMessage}
                   className="relative bg-white border border-gray-200 rounded-2xl shadow-lg focus-within:border-blue-400 focus-within:ring-4 focus-within:ring-blue-50/50 transition-all overflow-hidden flex flex-col"
                 >
-                  {/* File Preview inside Input */}
+
                   {uploadedFile && (
                     <div className="flex items-center gap-2 px-4 py-2 bg-gray-50/50 border-b border-gray-100 text-xs font-medium text-gray-500">
                       {uploadedFile.preview ? (
@@ -392,7 +449,7 @@ export default function App() {
                       }
                     }}
                     placeholder={isQuizActive ? "Type your answer..." : "Ask your tutor anything..."}
-                    className="w-full px-5 py-4 pr-14 bg-transparent outline-none resize-none text-[15px] min-h-[60px] max-h-32"
+                    className="w-full px-5 py-4 pr-28 bg-transparent outline-none resize-none text-[15px] min-h-[60px] max-h-32"
                     rows={1}
                   />
                   <div className="absolute right-3 bottom-3 flex items-center gap-2">
@@ -406,17 +463,31 @@ export default function App() {
                         <Square className="w-4 h-4 fill-current group-hover:scale-110 transition-transform" />
                       </button>
                     ) : (
-                      <button
-                        type="submit"
-                        disabled={!inputText.trim() || isGenerating}
-                        className={`p-2.5 rounded-xl transition-all ${
-                          inputText.trim() && !isGenerating
-                            ? "bg-blue-600 text-white shadow-lg hover:bg-blue-700 hover:shadow-xl active:scale-95"
-                            : "bg-gray-100 text-gray-400"
-                        }`}
-                      >
-                        <Send className="w-5 h-5" />
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          onClick={toggleVoiceInput}
+                          title={isListening ? "Stop listening" : "Voice input"}
+                          className={`p-2.5 rounded-xl transition-all ${
+                            isListening
+                              ? "bg-red-500 text-white shadow-lg animate-pulse"
+                              : "bg-gray-100 text-gray-500 hover:bg-gray-200 hover:text-gray-700"
+                          }`}
+                        >
+                          {isListening ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+                        </button>
+                        <button
+                          type="submit"
+                          disabled={!inputText.trim() || isGenerating}
+                          className={`p-2.5 rounded-xl transition-all ${
+                            inputText.trim() && !isGenerating
+                              ? "bg-blue-600 text-white shadow-lg hover:bg-blue-700 hover:shadow-xl active:scale-95"
+                              : "bg-gray-100 text-gray-400"
+                          }`}
+                        >
+                          <Send className="w-5 h-5" />
+                        </button>
+                      </>
                     )}
                   </div>
                 </form>
